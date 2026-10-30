@@ -20,6 +20,12 @@ The site works immediately in **demo mode** without a database. Choose Student, 
 
 The API provides health, authentication/registration, courses, notices, admissions, contact submissions, leave applications, attendance, marks, and administrator user CRUD endpoints. Protected endpoints require a bearer token; students can only view their own attendance, marks, and leave requests, administrators approve admissions and leave, and faculty updates are limited to assigned courses. The included schema contains starting tables for users, admission applications, courses, notices, contact messages, leave, attendance, and marks. Apply it before using the database-backed routes.
 
+## Run the tests
+
+Run `npm test` for the Vitest unit and property-based suites, or `npm run test:coverage` to also print statement and branch coverage and create an HTML report at `coverage/index.html`. Coverage uses the V8 provider. The API tests run Express against a mocked PostgreSQL pool, so they do not write to a development or production database. Property-based tests use fast-check with reproducible seeds reported by the runner on failure.
+
+See [TESTING.md](./TESTING.md) for the tested scope, latest results, coverage, known gaps, and recommendations.
+
 ## Demo access and scope
 
 - The fictional institution is **Northstar College**. Replace the sample copy, image URLs, and seed data with approved college content before production.

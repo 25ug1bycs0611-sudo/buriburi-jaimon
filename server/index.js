@@ -6,6 +6,8 @@ import rateLimit from "express-rate-limit";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pg from "pg";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -170,16 +172,21 @@ app.get("/api/attendance", requireDatabase, authenticate, async (req, res, next)
     const requestedStudent = req.query.studentId ? Number(req.query.studentId) : Number(req.user.sub);
     if (!Number.isSafeInteger(requestedStudent) || requestedStudent < 1) return res.status(400).json({ message: "Provide a valid student ID." });
     if (req.user.role === "student" && requestedStudent !== Number(req.user.sub)) return res.status(403).json({ message: "Students may only view their own attendance." });
+    const courseId = req.query.courseId ? Number(req.query.courseId) : null;
+    if (req.user.role === "faculty" && (!Number.isSafeInteger(courseId) || courseId < 1)) return res.status(400).json({ message: "Faculty must provide a valid assigned course ID." });
     if (req.user.role === "faculty") {
-      const assigned = await pool.query("SELECT 1 FROM course_faculty WHERE faculty_id = $1 AND ($2::bigint IS NULL OR course_id = $2) LIMIT 1", [req.user.sub, req.query.courseId || null]);
+      const assigned = await pool.query("SELECT 1 FROM course_faculty WHERE faculty_id = $1 AND course_id = $2 LIMIT 1", [req.user.sub, courseId]);
       if (!assigned.rowCount) return res.status(403).json({ message: "You may only view attendance for your assigned courses." });
     }
     const result = await pool.query(
       `SELECT a.id, a.student_id, a.course_id, c.title AS course, a.class_date, a.status
        FROM attendance a JOIN courses c ON c.id = a.course_id
        WHERE a.student_id = $1 AND ($2::bigint IS NULL OR a.course_id = $2)
+         AND ($3::text <> 'faculty' OR EXISTS (
+           SELECT 1 FROM course_faculty cf WHERE cf.faculty_id = $4 AND cf.course_id = a.course_id
+         ))
        ORDER BY a.class_date DESC LIMIT 500`,
-      [requestedStudent, req.query.courseId || null],
+      [requestedStudent, courseId, req.user.role, req.user.sub],
     );
     res.json(result.rows);
   } catch (error) { next(error); }
@@ -215,16 +222,21 @@ app.get("/api/marks", requireDatabase, authenticate, async (req, res, next) => {
     const requestedStudent = req.query.studentId ? Number(req.query.studentId) : Number(req.user.sub);
     if (!Number.isSafeInteger(requestedStudent) || requestedStudent < 1) return res.status(400).json({ message: "Provide a valid student ID." });
     if (req.user.role === "student" && requestedStudent !== Number(req.user.sub)) return res.status(403).json({ message: "Students may only view their own results." });
+    const courseId = req.query.courseId ? Number(req.query.courseId) : null;
+    if (req.user.role === "faculty" && (!Number.isSafeInteger(courseId) || courseId < 1)) return res.status(400).json({ message: "Faculty must provide a valid assigned course ID." });
     if (req.user.role === "faculty") {
-      const assigned = await pool.query("SELECT 1 FROM course_faculty WHERE faculty_id = $1 AND ($2::bigint IS NULL OR course_id = $2) LIMIT 1", [req.user.sub, req.query.courseId || null]);
+      const assigned = await pool.query("SELECT 1 FROM course_faculty WHERE faculty_id = $1 AND course_id = $2 LIMIT 1", [req.user.sub, courseId]);
       if (!assigned.rowCount) return res.status(403).json({ message: "You may only view results for your assigned courses." });
     }
     const result = await pool.query(
       `SELECT m.id, m.student_id, m.course_id, c.title AS course, m.assessment, m.score, m.max_score, m.created_at
        FROM student_marks m JOIN courses c ON c.id = m.course_id
        WHERE m.student_id = $1 AND ($2::bigint IS NULL OR m.course_id = $2)
+         AND ($3::text <> 'faculty' OR EXISTS (
+           SELECT 1 FROM course_faculty cf WHERE cf.faculty_id = $4 AND cf.course_id = m.course_id
+         ))
        ORDER BY m.created_at DESC LIMIT 500`,
-      [requestedStudent, req.query.courseId || null],
+      [requestedStudent, courseId, req.user.role, req.user.sub],
     );
     res.json(result.rows);
   } catch (error) { next(error); }
@@ -343,8 +355,12 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ message: "The server could not complete this request." });
 });
 
-app.listen(port, () => {
-  console.log(`Northstar API listening on http://localhost:${port} (${pool ? "database configured" : "demo mode: DATABASE_URL not set"})`);
-});
+export { app };
 
-process.on("SIGTERM", async () => { if (pool) await pool.end(); process.exit(0); });
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  app.listen(port, () => {
+    console.log(`Northstar API listening on http://localhost:${port} (${pool ? "database configured" : "demo mode: DATABASE_URL not set"})`);
+  });
+
+  process.on("SIGTERM", async () => { if (pool) await pool.end(); process.exit(0); });
+}
