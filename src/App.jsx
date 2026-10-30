@@ -6,6 +6,7 @@ import {
   Search, Settings, ShieldCheck, Sparkles, Sun, Users, X,
 } from "lucide-react";
 import { courses, events, faculty, initialStudents, seedNotices } from "./data";
+import ManagementPortal from "./ManagementPortal";
 
 const readStore = (key, fallback) => {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
@@ -65,7 +66,7 @@ function App() {
       <Route path="/faq" element={<FAQ />} />
       <Route path="/login/:role" element={<Login onLogin={login} />} />
       <Route path="/register" element={<Register data={data} onLogin={login} />} />
-      <Route path="/dashboard" element={<Dashboard session={session} data={data} logout={logout} />} />
+      <Route path="/dashboard" element={<ManagementPortal session={session} data={data} logout={logout} />} />
       <Route path="/profile" element={<Profile session={session} onSave={login} />} />
       <Route path="*" element={<NotFound />} />
     </Routes>

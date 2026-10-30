@@ -166,4 +166,22 @@ describe("dashboard access and leave requests", () => {
     expect(screen.queryByRole("button", { name: "Admissions" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Faculty" })).toBeNull();
   });
+
+  it("creates a validated student record in the local administrator demo workspace", async () => {
+    localStorage.setItem("northstar-session", JSON.stringify({
+      name: "Northstar Admin", email: "admin@example.com", role: "admin", demo: true,
+    }));
+    renderApp("/dashboard");
+    fireEvent.click((await screen.findAllByRole("button", { name: "Students" }))[0]);
+    fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Jamie Example" } });
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "jamie@example.edu" } });
+    fireEvent.change(screen.getByLabelText("Initial password"), { target: { value: "long-password-123" } });
+    fireEvent.change(screen.getByLabelText("Department"), { target: { value: "Computer Science" } });
+    fireEvent.change(screen.getByLabelText("Academic year"), { target: { value: "Year 1" } });
+    fireEvent.submit(screen.getByRole("button", { name: /Add student/ }).closest("form"));
+
+    expect(await screen.findByText("Student record created.")).toBeTruthy();
+    expect(screen.getByText("Jamie Example")).toBeTruthy();
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });

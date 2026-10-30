@@ -8,6 +8,7 @@ import jwt from "jsonwebtoken";
 import pg from "pg";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { registerManagementRoutes } from "./management.js";
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -108,12 +109,13 @@ app.post("/api/auth/register", requireDatabase, async (req, res, next) => {
 });
 
 app.get("/api/courses", requireDatabase, async (_req, res, next) => {
-  try { const result = await pool.query("SELECT id, title, department, degree, description FROM courses WHERE published = true ORDER BY title"); res.json(result.rows); }
+  try { const result = await pool.query("SELECT id, title, department_id, department, degree, description, course_code, semester FROM courses WHERE published = true ORDER BY title"); res.json(result.rows); }
   catch (error) { next(error); }
 });
 
-app.get("/api/notices", requireDatabase, async (_req, res, next) => {
-  try { const result = await pool.query("SELECT id, title, body, audience, created_at FROM notices WHERE published = true ORDER BY created_at DESC LIMIT 100"); res.json(result.rows); }
+app.get("/api/notices", requireDatabase, async (req, res, next) => {
+  const audience = ["students", "faculty"].includes(req.query.audience) ? req.query.audience : null;
+  try { const result = await pool.query("SELECT id, title, body, audience, created_at FROM notices WHERE published = true AND ($1::text IS NULL OR audience IN ('all', $1)) ORDER BY created_at DESC LIMIT 100", [audience]); res.json(result.rows); }
   catch (error) { next(error); }
 });
 
@@ -190,31 +192,6 @@ app.get("/api/attendance", requireDatabase, authenticate, async (req, res, next)
     );
     res.json(result.rows);
   } catch (error) { next(error); }
-});
-
-app.put("/api/attendance", requireDatabase, authenticate, allowRoles("faculty", "admin"), async (req, res, next) => {
-  const { courseId, classDate, records } = req.body || {};
-  if (!Number.isSafeInteger(Number(courseId)) || !/^\d{4}-\d{2}-\d{2}$/.test(classDate || "") || !Array.isArray(records) || records.length < 1 || records.length > 200 || records.some((item) => !Number.isSafeInteger(Number(item.studentId)) || !["present", "absent", "leave"].includes(item.status))) return res.status(400).json({ message: "Provide a course, class date, and up to 200 valid student attendance records." });
-  const client = await pool.connect();
-  try {
-    if (req.user.role === "faculty") {
-      const assigned = await client.query("SELECT 1 FROM course_faculty WHERE faculty_id = $1 AND course_id = $2", [req.user.sub, courseId]);
-      if (!assigned.rowCount) return res.status(403).json({ message: "You may only update attendance for your assigned courses." });
-    }
-    await client.query("BEGIN");
-    for (const record of records) {
-      await client.query(
-        `INSERT INTO attendance (student_id, course_id, class_date, status, marked_by) VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (student_id, course_id, class_date) DO UPDATE SET status = EXCLUDED.status, marked_by = EXCLUDED.marked_by`,
-        [record.studentId, courseId, classDate, record.status, req.user.sub],
-      );
-    }
-    await client.query("COMMIT");
-    res.json({ updated: records.length });
-  } catch (error) {
-    await client.query("ROLLBACK");
-    next(error);
-  } finally { client.release(); }
 });
 
 app.get("/api/marks", requireDatabase, authenticate, async (req, res, next) => {
@@ -348,6 +325,8 @@ app.delete("/api/users/:id", requireDatabase, authenticate, allowRoles("admin"),
     res.status(204).end();
   } catch (error) { next(error); }
 });
+
+registerManagementRoutes(app, { pool, requireDatabase, authenticate, allowRoles });
 
 app.use((error, _req, res, _next) => {
   console.error("API request failed:", error.message);

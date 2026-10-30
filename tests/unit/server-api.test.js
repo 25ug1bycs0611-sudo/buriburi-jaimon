@@ -167,6 +167,124 @@ describe("authentication and authorization API", () => {
   });
 });
 
+describe("student management API", () => {
+  it("keeps the student directory restricted to administrators and assigned faculty", async () => {
+    const student = await request("/api/students", { token: tokenFor("student", 7) });
+    const unfilteredFaculty = await request("/api/students", { token: tokenFor("faculty", 9) });
+
+    expect(student.response.status).toBe(403);
+    expect(unfilteredFaculty.response.status).toBe(400);
+    expect(mockPool.query).not.toHaveBeenCalled();
+  });
+
+  it("prevents students from changing their department or academic year", async () => {
+    const { response, body } = await request("/api/students/7", {
+      method: "PATCH",
+      token: tokenFor("student", 7),
+      body: { department: "Law & Public Policy", year: "Year 5" },
+    });
+
+    expect(response.status).toBe(403);
+    expect(body.message).toMatch(/department or academic year/i);
+    expect(mockPool.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects result marks above the permitted range before database access", async () => {
+    const { response, body } = await request("/api/results", {
+      method: "PUT",
+      token: tokenFor("admin"),
+      body: {
+        studentId: 7, courseId: 2, semester: 1,
+        assignmentMarks: 101, internalMarks: 80, practicalMarks: 70, finalMarks: 90,
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(body.message).toMatch(/between 0 and 100/i);
+    expect(mockPool.query).not.toHaveBeenCalled();
+  });
+
+  it("calculates a persisted result grade from the configured percentage scale", async () => {
+    mockPool.query.mockResolvedValueOnce({
+      rows: [{
+        id: 21, student_id: 7, course_id: 2, semester: 1,
+        assignment_marks: 90, internal_marks: 90, practical_marks: 90, final_marks: 90,
+        total_marks: 360, percentage: 90,
+      }],
+      rowCount: 1,
+    });
+    const { response, body } = await request("/api/results", {
+      method: "PUT",
+      token: tokenFor("admin"),
+      body: {
+        studentId: 7, courseId: 2, semester: 1,
+        assignmentMarks: 90, internalMarks: 90, practicalMarks: 90, finalMarks: 90,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ total_marks: 360, percentage: 90, grade: "A" });
+    expect(mockPool.query.mock.calls[0][0]).toContain("ON CONFLICT (student_id, course_id, semester)");
+  });
+
+  it("rejects duplicate student entries in one attendance batch", async () => {
+    const { response, body } = await request("/api/attendance", {
+      method: "PUT",
+      token: tokenFor("admin"),
+      body: {
+        courseId: 2, classDate: "2026-11-02",
+        records: [{ studentId: 7, status: "present" }, { studentId: 7, status: "absent" }],
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(body.message).toMatch(/unique students/i);
+    expect(mockPool.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported or malformed payment requests before acquiring a transaction", async () => {
+    const { response, body } = await request("/api/payments", {
+      method: "POST",
+      token: tokenFor("admin"),
+      body: { studentId: 7, paymentMethod: "crypto", idempotencyKey: "not-a-uuid" },
+    });
+
+    expect(response.status).toBe(400);
+    expect(body.message).toMatch(/payment method/i);
+    expect(mockPool.connect).not.toHaveBeenCalled();
+  });
+
+  it("forces student fee queries to use the authenticated student's ID", async () => {
+    await request("/api/fees?studentId=99", { token: tokenFor("student", 7) });
+
+    expect(mockPool.query).toHaveBeenCalledTimes(1);
+    expect(mockPool.query.mock.calls[0][1]).toEqual([7]);
+  });
+
+  it("does not allow students to create class schedule entries", async () => {
+    const { response } = await request("/api/schedule", {
+      method: "POST",
+      token: tokenFor("student"),
+      body: { courseId: 2, facultyId: 3, startsAt: "2099-01-01T10:00:00.000Z", location: "Room 1" },
+    });
+
+    expect(response.status).toBe(403);
+    expect(mockPool.query).not.toHaveBeenCalled();
+  });
+
+  it("does not schedule faculty that are not assigned to a course", async () => {
+    const { response, body } = await request("/api/schedule", {
+      method: "POST",
+      token: tokenFor("admin"),
+      body: { courseId: 2, facultyId: 3, startsAt: "2099-01-01T10:00:00.000Z", location: "Room 1" },
+    });
+
+    expect(response.status).toBe(400);
+    expect(body.message).toMatch(/assign the faculty member/i);
+    expect(mockPool.query.mock.calls[0][0]).toContain("FROM course_faculty");
+  });
+});
+
 describe("student registration and login API", () => {
   it("rejects malformed registration before opening a database connection", async () => {
     const { response, body } = await request("/api/auth/register", {
