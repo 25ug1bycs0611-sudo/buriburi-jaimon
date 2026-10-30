@@ -39,6 +39,16 @@ async function request(path, { method = "GET", token, body } = {}) {
   };
 }
 
+async function requestForm(path, { method = "POST", token, body } = {}) {
+  const headers = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${baseUrl}${path}`, { method, headers, body });
+  return {
+    response,
+    body: response.status === 204 ? null : await response.json(),
+  };
+}
+
 beforeAll(async () => {
   for (const key of ["DATABASE_URL", "JWT_SECRET"]) previousEnvironment[key] = process.env[key];
   process.env.DATABASE_URL = "postgres://test.invalid/northstar";
@@ -161,6 +171,157 @@ describe("authentication and authorization API", () => {
       token: tokenFor("admin", 7, "-1h"),
       body: { status: "accepted" },
     });
+
+    expect(response.status).toBe(401);
+    expect(mockPool.query).not.toHaveBeenCalled();
+  });
+});
+
+describe("complaint management API", () => {
+  it("requires authentication and blocks faculty from submitting student complaints", async () => {
+    const anonymous = await request("/api/complaints");
+    const faculty = await request("/api/complaints", {
+      method: "POST",
+      token: tokenFor("faculty"),
+      body: { title: "Not a student complaint" },
+    });
+
+    expect(anonymous.response.status).toBe(401);
+    expect(faculty.response.status).toBe(403);
+    expect(mockPool.query).not.toHaveBeenCalled();
+    expect(mockPool.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed complaint submissions before database access", async () => {
+    const { response, body } = await request("/api/complaints", {
+      method: "POST",
+      token: tokenFor("student"),
+      body: { title: "Too short" },
+    });
+
+    expect(response.status).toBe(400);
+    expect(body.message).toMatch(/required complaint fields/i);
+    expect(mockPool.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid complaint contact details", async () => {
+    const form = new FormData();
+    form.append("title", "A valid complaint title");
+    form.append("description", "A sufficiently detailed complaint description.");
+    form.append("category", "Technical");
+    form.append("departmentId", "1");
+    form.append("priority", "Medium");
+    form.append("location", "Main building");
+    form.append("complaintDate", new Date().toISOString().slice(0, 10));
+    form.append("contactInfo", "123-456");
+
+    const { response } = await requestForm("/api/complaints", {
+      token: tokenFor("student"),
+      body: form,
+    });
+
+    expect(response.status).toBe(400);
+    expect(mockPool.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects evidence whose content signature does not match the claimed image type", async () => {
+    const form = new FormData();
+    form.append("title", "A valid complaint title");
+    form.append("description", "A sufficiently detailed complaint description.");
+    form.append("category", "Technical");
+    form.append("departmentId", "1");
+    form.append("priority", "Medium");
+    form.append("location", "Main building");
+    form.append("complaintDate", "2026-10-30");
+    form.append("contactInfo", "student@example.com");
+    form.append("evidence", new Blob(["not an image"], { type: "image/png" }), "evidence.png");
+
+    const { response, body } = await requestForm("/api/complaints", {
+      token: tokenFor("student"),
+      body: form,
+    });
+
+    expect(response.status).toBe(400);
+    expect(body.message).toMatch(/genuine JPEG, PNG, WebP image, or PDF/i);
+    expect(mockPool.connect).not.toHaveBeenCalled();
+  });
+
+  it("creates a complaint transactionally and generates a unique tracking code", async () => {
+    mockClient.query.mockImplementation(async (query) => query.includes("INSERT INTO complaints")
+      ? { rows: [{ id: 42, status: "Submitted", created_at: "2026-10-30T00:00:00.000Z" }], rowCount: 1 }
+      : { rows: [], rowCount: 1 });
+    const form = new FormData();
+    form.append("title", "A valid complaint title");
+    form.append("description", "A sufficiently detailed complaint description.");
+    form.append("category", "Technical");
+    form.append("departmentId", "1");
+    form.append("priority", "High");
+    form.append("location", "Main building");
+    form.append("complaintDate", new Date().toISOString().slice(0, 10));
+    form.append("contactInfo", "student@example.com");
+
+    const { response, body } = await requestForm("/api/complaints", {
+      token: tokenFor("student"),
+      body: form,
+    });
+
+    expect(response.status).toBe(201);
+    expect(body).toMatchObject({ id: 42, complaint_code: `CMP-${new Date().getFullYear()}-000042`, status: "Submitted" });
+    expect(mockClient.query).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO complaints (user_id"),
+      expect.arrayContaining([7, "A valid complaint title", "Technical", "High"]),
+    );
+    expect(mockClient.query).toHaveBeenCalledWith("COMMIT");
+    expect(mockClient.release).toHaveBeenCalled();
+  });
+
+  it("prevents department staff from reassigning a complaint or changing its department", async () => {
+    const { response, body } = await request("/api/complaints/3", {
+      method: "PATCH",
+      token: tokenFor("staff"),
+      body: { departmentId: 2, staffId: 9, status: "In Progress" },
+    });
+
+    expect(response.status).toBe(403);
+    expect(body.message).toMatch(/staff may update progress/i);
+    expect(mockPool.connect).not.toHaveBeenCalled();
+  });
+
+  it("restricts complaint list queries to the authenticated student and validates filters", async () => {
+    const invalid = await request("/api/complaints?status=Unknown", { token: tokenFor("student") });
+    const invalidSort = await request("/api/complaints?sort=created_at%3Bdrop", { token: tokenFor("student") });
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ total: 0 }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const listing = await request("/api/complaints?status=Submitted", { token: tokenFor("student") });
+
+    expect(invalid.response.status).toBe(400);
+    expect(invalidSort.response.status).toBe(400);
+    expect(listing.response.status).toBe(200);
+    expect(mockPool.query).toHaveBeenCalledTimes(2);
+    expect(mockPool.query.mock.calls[0][0]).toContain("c.user_id = $2");
+    expect(mockPool.query.mock.calls[0][1].slice(0, 2)).toEqual(["student", 7]);
+    expect(mockPool.query.mock.calls[0][0]).toContain("role = 'staff'");
+  });
+
+  it("uses the current database department to scope staff complaint access", async () => {
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ total: 0 }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const staffToken = jwt.sign(
+      { sub: 9, role: "staff", department: "A stale department claim" },
+      secret,
+      { expiresIn: "1h", issuer: "northstar-college" },
+    );
+    const { response } = await request("/api/complaints", { token: staffToken });
+
+    expect(response.status).toBe(200);
+    expect(mockPool.query.mock.calls[0][0]).toContain("SELECT department FROM users WHERE id = $2 AND role = 'staff'");
+    expect(mockPool.query.mock.calls[0][1]).not.toContain("A stale department claim");
+  });
+
+  it("requires complaint access before evidence can be fetched", async () => {
+    const { response } = await request("/api/complaints/3/evidence");
 
     expect(response.status).toBe(401);
     expect(mockPool.query).not.toHaveBeenCalled();
@@ -598,6 +759,47 @@ describe("public content and administrative workflows", () => {
     const insertedValues = mockPool.query.mock.calls[0][1];
     expect(insertedValues[6]).not.toBe("initial-password");
     expect(await bcrypt.compare("initial-password", insertedValues[6])).toBe(true);
+  });
+
+  it("creates department staff accounts with hashed passwords and a department", async () => {
+    mockPool.query.mockResolvedValue({
+      rows: [{ id: 12, name: "Jordan Lee", email: "jordan@example.com", role: "staff", department: "Computer Science", status: "active" }],
+      rowCount: 1,
+    });
+    const { response, body } = await request("/api/users", {
+      method: "POST",
+      token: tokenFor("admin"),
+      body: {
+        name: "Jordan Lee",
+        email: "jordan@example.com",
+        role: "staff",
+        department: "Computer Science",
+        password: "initial-password",
+      },
+    });
+
+    expect(response.status).toBe(201);
+    expect(body.role).toBe("staff");
+    const insertedValues = mockPool.query.mock.calls[0][1];
+    expect(insertedValues[6]).not.toBe("initial-password");
+    expect(await bcrypt.compare("initial-password", insertedValues[6])).toBe(true);
+  });
+
+  it("requires a department for staff accounts", async () => {
+    const { response, body } = await request("/api/users", {
+      method: "POST",
+      token: tokenFor("admin"),
+      body: {
+        name: "Jordan Lee",
+        email: "jordan@example.com",
+        role: "staff",
+        password: "initial-password",
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(body.message).toMatch(/department/i);
+    expect(mockPool.query).not.toHaveBeenCalled();
   });
 
   it("rejects short profile names and does not update the database", async () => {

@@ -8,7 +8,7 @@ A responsive React + Tailwind college website with interactive public pages, rol
 2. Run `npm install`.
 3. Run `npm run dev`, then open the local URL shown by Vite.
 
-The site works immediately in **demo mode** without a database. Choose Student, Faculty, or Administrator from the login page; demo sign-in accepts any email and password. Demo data and changes are kept in this browser's local storage and are not real college records.
+The site works immediately in **demo mode** without a database. Choose Student, Faculty, Department staff, or Administrator from the login page; demo sign-in accepts any email and password. Demo data and changes are kept in this browser's local storage and are not real college records.
 
 ## Enable the backend
 
@@ -19,6 +19,36 @@ The site works immediately in **demo mode** without a database. Choose Student, 
 5. Vite proxies `/api` requests to `http://localhost:4000`; configured forms and sign-in use the persistent API, while unavailable/unconfigured services use clearly labeled demo mode.
 
 The API supports student and faculty profiles, departments, course enrollment and faculty assignment, class schedules, attendance, results, fees and payment receipts, announcements, admissions, leave applications, and administrator statistics. Protected endpoints require a bearer token. Students can only access their own academic, profile, fee, schedule, and leave records; faculty attendance, roster, schedule, and results are scoped to assigned courses; administrator actions are role-protected. `server/schema.sql` creates the required tables, adds the newer fields to the original starter schema, and inserts sample departments and courses. Reapply it after pulling schema updates; its table, index, and sample-row setup is designed to be repeatable.
+
+## Complaint management
+
+The **Help desk** navigation and `/complaints` route provide complaint dashboards for students, administrators, and department staff. Students can submit and track complaints, attach one JPEG/PNG/WebP/PDF evidence file (maximum 5 MB), see response history, receive in-app notifications, and rate resolved complaints. Administrators can search and filter the full register, assign departments and staff, update statuses, respond, remove complaints, create department staff accounts, view statistics, and export a complete filtered CSV report. Staff accounts see complaints for their own department and can post progress and resolutions. Each update is recorded in the complaint timeline.
+
+The complaint tables are part of `server/schema.sql`; reapply the schema to an existing database before using the complaint APIs. Evidence bytes are kept in PostgreSQL and can only be downloaded through the authenticated, access-scoped API; no public upload directory is exposed. Use a production database with an appropriate backup/retention policy for uploaded evidence. Notifications are in-app only; email/SMS delivery is not configured.
+
+### Complaint API
+
+All complaint endpoints except `GET /api/departments` require a bearer token. Student and staff access is scoped to the authenticated user and the staff member's department, respectively.
+
+| Method | Endpoint | Access | Purpose |
+|---|---|---|---|
+| `GET` | `/api/departments` | Public | Get department choices |
+| `GET` | `/api/complaints` | Student, staff, admin | Search, filter, and paginate permitted complaints (`page`, `limit` up to 50, `search`, `status`, `category`, `priority`, `department`; sort with `sort=date|priority` and `order=asc|desc`) |
+| `POST` | `/api/complaints` | Student | Submit a complaint as multipart form data; optional `evidence` file |
+| `GET` | `/api/complaints/stats` | Student, staff, admin | Get role-scoped totals, department counts, and monthly counts |
+| `GET` | `/api/complaints/:id` | Owner, department staff, admin | Get complaint details and activity history |
+| `PATCH` | `/api/complaints/:id` | Department staff, admin | Update status and response; admin may assign department and staff |
+| `DELETE` | `/api/complaints/:id` | Admin | Delete a complaint and its attached history/evidence |
+| `GET` | `/api/complaints/:id/evidence` | Owner, department staff, admin | Download private evidence |
+| `POST` | `/api/complaints/:id/feedback` | Owner | Rate a resolved complaint (one rating per complaint) |
+| `GET` | `/api/complaints/notifications` | Signed-in user | Get the user's complaint notifications |
+| `PATCH` | `/api/complaints/notifications/:id` | Notification owner | Mark a notification read |
+| `GET` | `/api/complaints/staff?departmentId=:id` | Admin | List staff for a department |
+| `GET` / `POST` | `/api/users?role=staff` / `/api/users` | Admin | List users or create a hashed-password staff account |
+
+Use the existing secure setup above: configure `DATABASE_URL` and a unique `JWT_SECRET` in `.env`, apply `server/schema.sql`, create the first administrator with `npm run create-admin`, and start the API and Vite frontend. Administrators create staff accounts from the complaint workspace's **People** section; staff sign in at `/login/staff`.
+
+When the backend is not configured, complaint records use clearly labeled browser-local demo storage. Sign in at `/login/student`, `/login/staff`, or `/login/admin` with any email and password; the demo staff role is scoped to Computer Science. The demo creates synthetic sample complaints and allows students to submit, administrators to assign/update, and staff to manage their department's sample records. Demo uploads are not persisted, demo staff passwords are not stored, and demo records are not sent to PostgreSQL. With PostgreSQL configured, demo sign-in is disabled; use the administrator account you created and add staff through the admin workspace.
 
 ### Academic and fee rules
 

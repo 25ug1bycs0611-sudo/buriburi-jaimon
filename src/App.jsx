@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowDown, ArrowRight, ArrowUpRight, Bell, BookOpen, CalendarDays, Check, ChevronDown, ChevronRight,
@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { courses, events, faculty, initialStudents, seedNotices } from "./data";
 import ManagementPortal from "./ManagementPortal";
+const ComplaintPortal = lazy(() => import("./ComplaintPortal"));
 
 const readStore = (key, fallback) => {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
@@ -67,6 +68,7 @@ function App() {
       <Route path="/login/:role" element={<Login onLogin={login} />} />
       <Route path="/register" element={<Register data={data} onLogin={login} />} />
       <Route path="/dashboard" element={<ManagementPortal session={session} data={data} logout={logout} />} />
+      <Route path="/complaints" element={<Suspense fallback={<main className="complaint-loading">Loading complaint workspace…</main>}><ComplaintPortal session={session} logout={logout} /></Suspense>} />
       <Route path="/profile" element={<Profile session={session} onSave={login} />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
@@ -74,7 +76,7 @@ function App() {
   </div>;
 }
 
-const navItems = [["About", "/about"], ["Academics", "/courses"], ["Campus life", "/campus"], ["Admissions", "/admissions"], ["News & events", "/news"]];
+const navItems = [["About", "/about"], ["Academics", "/courses"], ["Campus life", "/campus"], ["Admissions", "/admissions"], ["Help desk", "/complaints"]];
 
 function Header({ session, dark, setDark, logout }) {
   const [open, setOpen] = useState(false);
@@ -93,7 +95,7 @@ function Header({ session, dark, setDark, logout }) {
         <button className="icon-button theme-toggle" aria-label={dark ? "Switch to light mode" : "Switch to dark mode"} onClick={() => setDark(!dark)}>{dark ? <Sun size={18} /> : <Moon size={18} />}</button>
         {session ? <div className="profile-menu-wrap">
           <button className="profile-trigger" onClick={() => setProfileOpen(!profileOpen)}><span className="mini-avatar">{session.name?.split(" ").map(x => x[0]).slice(0, 2).join("")}</span><span className="profile-trigger-name">{session.name?.split(" ")[0]}</span><ChevronDown size={14} /></button>
-          {profileOpen && <div className="profile-menu"><Link to="/dashboard"><LayoutDashboard size={15} /> Dashboard</Link><Link to="/profile"><Settings size={15} /> Account settings</Link><button onClick={logout}><LogOut size={15} /> Sign out</button></div>}
+          {profileOpen && <div className="profile-menu"><Link to="/dashboard"><LayoutDashboard size={15} /> Dashboard</Link><Link to="/complaints"><CircleHelp size={15} /> Complaints</Link><Link to="/profile"><Settings size={15} /> Account settings</Link><button onClick={logout}><LogOut size={15} /> Sign out</button></div>}
         </div> : <Link className="nav-login" to="/login/student">Sign in <ArrowUpRight size={14} /></Link>}
         <Link className="button button-navy nav-apply" to="/admissions">Apply now <ArrowRight size={15} /></Link>
       </div>
@@ -271,6 +273,7 @@ function Login({ onLogin }) {
   const roles = [
     { id: "student", title: "Student", icon: GraduationCap },
     { id: "faculty", title: "Faculty", icon: BookOpen },
+    { id: "staff", title: "Department staff", icon: Users },
     { id: "admin", title: "Administrator", icon: ShieldCheck },
   ];
   const selectedRole = roles.find((item) => item.id === role) || roles[0];
@@ -291,10 +294,10 @@ function Login({ onLogin }) {
       if (requestError instanceof TypeError) { /* API unavailable: use clearly labeled local demo mode. */ }
       else if (requestError.message !== "Failed to fetch") { setError(requestError.message); setLoading(false); return; }
     }
-    onLogin({ name: name || (role === "admin" ? "College Admin" : "Alex Morgan"), email, role, demo: true });
+    onLogin({ name: name || (role === "admin" ? "College Admin" : "Alex Morgan"), email, role, ...(role === "staff" ? { department: "Computer Science" } : {}), demo: true });
     setLoading(false); navigate("/dashboard");
   };
-  return <main className="auth-page"><div className="auth-aside"><div className="auth-aside-art"><span>✳</span><p>There's more than one way to find your way.</p></div><div className="auth-aside-bottom"><Link to="/" className="brand brand-footer"><span className="brand-mark"><span>✳</span></span><span className="brand-name">northstar<span>COLLEGE</span></span></Link><span>Made for curious minds. Est. 1986.</span></div></div><div className="auth-main"><div className="auth-card"><div className="auth-back"><Link to="/">← Back to Northstar</Link></div><div className="eyebrow"><span className="eyebrow-star">✳</span> GOOD TO HAVE YOU HERE</div><h1>Come on <em>in.</em></h1><p className="auth-subtitle">A little closer to what you’re here to do.</p><div className="role-tabs">{roles.map(({ id, title, icon: Icon }) => <Link className={role === id ? "role-tab selected" : "role-tab"} to={`/login/${id}`} key={id}><Icon size={16} />{title}</Link>)}</div><form className="form-stack" onSubmit={submit}><label>{role === "student" ? "Email address or student ID" : role === "faculty" ? "Email address or faculty ID" : "Administrator email"}<input name="email" type={role === "admin" ? "email" : "text"} autoComplete="username" placeholder={role === "student" ? "you@northstar.edu or NS202700001" : role === "faculty" ? "you@northstar.edu or FAC0001" : "admin@northstar.edu"} required /></label><label>Password<input name="password" type="password" autoComplete="current-password" placeholder="Your password" required minLength="4" /></label><div className="auth-options"><label className="check-label"><input type="checkbox" /> <span>Remember me</span></label><Link to="/contact">Forgot password?</Link></div>{error && <p className="form-error" role="alert">{error}</p>}<button disabled={loading} className="button button-navy form-submit">{loading ? "Signing you in…" : `Sign in as ${selectedRole.title}`} <ArrowRight size={16} /></button></form><div className="demo-hint"><Sparkles size={15} /><span><strong>Just exploring?</strong> Demo mode is on. Use any email and password.</span></div>{role === "student" && <div className="auth-register">New to Northstar? <Link to="/register">Create a student account <ArrowRight size={14} /></Link></div>}</div><div className="auth-help">Need a hand? <Link to="/contact">Contact support</Link></div></div></main>;
+  return <main className="auth-page"><div className="auth-aside"><div className="auth-aside-art"><span>✳</span><p>There's more than one way to find your way.</p></div><div className="auth-aside-bottom"><Link to="/" className="brand brand-footer"><span className="brand-mark"><span>✳</span></span><span className="brand-name">northstar<span>COLLEGE</span></span></Link><span>Made for curious minds. Est. 1986.</span></div></div><div className="auth-main"><div className="auth-card"><div className="auth-back"><Link to="/">← Back to Northstar</Link></div><div className="eyebrow"><span className="eyebrow-star">✳</span> GOOD TO HAVE YOU HERE</div><h1>Come on <em>in.</em></h1><p className="auth-subtitle">A little closer to what you’re here to do.</p><div className="role-tabs">{roles.map(({ id, title, icon: Icon }) => <Link className={role === id ? "role-tab selected" : "role-tab"} to={`/login/${id}`} key={id}><Icon size={16} />{title}</Link>)}</div><form className="form-stack" onSubmit={submit}><label>{role === "student" ? "Email address or student ID" : role === "faculty" ? "Email address or faculty ID" : role === "staff" ? "Department staff email" : "Administrator email"}<input name="email" type={role === "admin" ? "email" : "text"} autoComplete="username" placeholder={role === "student" ? "you@northstar.edu or NS202700001" : role === "faculty" ? "you@northstar.edu or FAC0001" : "you@northstar.edu"} required /></label><label>Password<input name="password" type="password" autoComplete="current-password" placeholder="Your password" required minLength="4" /></label><div className="auth-options"><label className="check-label"><input type="checkbox" /> <span>Remember me</span></label><Link to="/contact">Forgot password?</Link></div>{error && <p className="form-error" role="alert">{error}</p>}<button disabled={loading} className="button button-navy form-submit">{loading ? "Signing you in…" : `Sign in as ${selectedRole.title}`} <ArrowRight size={16} /></button></form><div className="demo-hint"><Sparkles size={15} /><span><strong>Just exploring?</strong> Demo mode is on. Use any email and password.</span></div>{role === "student" && <div className="auth-register">New to Northstar? <Link to="/register">Create a student account <ArrowRight size={14} /></Link></div>}</div><div className="auth-help">Need a hand? <Link to="/contact">Contact support</Link></div></div></main>;
 }
 
 function Register({ data, onLogin }) {

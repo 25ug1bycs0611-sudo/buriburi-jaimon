@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS users (
   name VARCHAR(160) NOT NULL,
   email VARCHAR(254) NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
-  role VARCHAR(16) NOT NULL CHECK (role IN ('student', 'faculty', 'admin')),
+  role VARCHAR(16) NOT NULL CHECK (role IN ('student', 'faculty', 'staff', 'admin')),
   student_id VARCHAR(24) UNIQUE,
   employee_id VARCHAR(24) UNIQUE,
   department VARCHAR(120),
@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS users (
   status VARCHAR(16) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('student', 'faculty', 'staff', 'admin'));
 
 CREATE INDEX IF NOT EXISTS users_role_created_idx ON users (role, created_at DESC);
 
@@ -31,6 +34,69 @@ INSERT INTO departments (name) VALUES
   ('Liberal Arts'),
   ('Law & Public Policy')
 ON CONFLICT (name) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS complaints (
+  id BIGSERIAL PRIMARY KEY,
+  complaint_code VARCHAR(32) UNIQUE,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title VARCHAR(180) NOT NULL,
+  description TEXT NOT NULL,
+  category VARCHAR(32) NOT NULL CHECK (category IN ('Academic', 'Technical', 'Infrastructure', 'Hostel', 'Transport', 'Library', 'Fees', 'Other')),
+  department_id BIGINT NOT NULL REFERENCES departments(id) ON DELETE RESTRICT,
+  priority VARCHAR(12) NOT NULL DEFAULT 'Medium' CHECK (priority IN ('Low', 'Medium', 'High', 'Urgent')),
+  location VARCHAR(180) NOT NULL,
+  complaint_date DATE NOT NULL,
+  contact_info VARCHAR(180) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'Submitted' CHECK (status IN ('Submitted', 'Under Review', 'Assigned', 'In Progress', 'Resolved', 'Rejected')),
+  assigned_staff_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS complaints_owner_created_idx ON complaints (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS complaints_department_status_idx ON complaints (department_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS complaints_priority_created_idx ON complaints (priority, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS complaint_updates (
+  id BIGSERIAL PRIMARY KEY,
+  complaint_id BIGINT NOT NULL REFERENCES complaints(id) ON DELETE CASCADE,
+  actor_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  status VARCHAR(20) CHECK (status IS NULL OR status IN ('Submitted', 'Under Review', 'Assigned', 'In Progress', 'Resolved', 'Rejected')),
+  message VARCHAR(3000) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS complaint_updates_complaint_idx ON complaint_updates (complaint_id, created_at);
+
+CREATE TABLE IF NOT EXISTS complaint_attachments (
+  id BIGSERIAL PRIMARY KEY,
+  complaint_id BIGINT NOT NULL REFERENCES complaints(id) ON DELETE CASCADE,
+  filename VARCHAR(180) NOT NULL,
+  mime_type VARCHAR(80) NOT NULL CHECK (mime_type IN ('image/jpeg', 'image/png', 'image/webp', 'application/pdf')),
+  content BYTEA NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS complaint_notifications (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  complaint_id BIGINT NOT NULL REFERENCES complaints(id) ON DELETE CASCADE,
+  message VARCHAR(500) NOT NULL,
+  read_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS complaint_notifications_user_idx ON complaint_notifications (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS complaint_feedback (
+  id BIGSERIAL PRIMARY KEY,
+  complaint_id BIGINT NOT NULL UNIQUE REFERENCES complaints(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  rating SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  comment VARCHAR(1000),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 CREATE TABLE IF NOT EXISTS courses (
   id BIGSERIAL PRIMARY KEY,

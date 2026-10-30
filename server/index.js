@@ -9,6 +9,7 @@ import pg from "pg";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { registerManagementRoutes } from "./management.js";
+import { registerComplaintRoutes } from "./complaints.js";
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -70,7 +71,7 @@ app.post("/api/auth/login", requireDatabase, async (req, res, next) => {
     const user = result.rows[0];
     if (!user || !(await bcrypt.compare(req.body.password, user.password_hash))) return res.status(401).json({ message: "Email or password is incorrect." });
     if (req.body.role && req.body.role !== user.role) return res.status(403).json({ message: `This account is registered as ${user.role}. Choose the matching sign-in type.` });
-    const token = jwt.sign({ sub: user.id, role: user.role, email: user.email }, jwtSecret, { expiresIn: "8h", issuer: "northstar-college" });
+    const token = jwt.sign({ sub: user.id, role: user.role, email: user.email, department: user.department }, jwtSecret, { expiresIn: "8h", issuer: "northstar-college" });
     res.json({ token, user: publicUser(user) });
   } catch (error) { next(error); }
 });
@@ -98,7 +99,7 @@ app.post("/api/auth/register", requireDatabase, async (req, res, next) => {
         user = { ...user, student_id: studentId };
       }
       await client.query("COMMIT");
-      const token = jwt.sign({ sub: user.id, role: user.role, email: user.email }, jwtSecret, { expiresIn: "8h", issuer: "northstar-college" });
+      const token = jwt.sign({ sub: user.id, role: user.role, email: user.email, department: user.department }, jwtSecret, { expiresIn: "8h", issuer: "northstar-college" });
       res.status(201).json({ token, user: publicUser(user) });
     } catch (error) {
       await client.query("ROLLBACK");
@@ -273,7 +274,7 @@ app.patch("/api/leave/:id", requireDatabase, authenticate, allowRoles("admin"), 
 app.get("/api/users", requireDatabase, authenticate, allowRoles("admin"), async (req, res, next) => {
   try {
     const role = req.query.role;
-    if (role && !["student", "faculty", "admin"].includes(role)) return res.status(400).json({ message: "Choose a valid role filter." });
+    if (role && !["student", "faculty", "staff", "admin"].includes(role)) return res.status(400).json({ message: "Choose a valid role filter." });
     const result = await pool.query(
       "SELECT id, name, email, role, student_id, employee_id, department, year, status, created_at FROM users WHERE ($1::text IS NULL OR role = $1) ORDER BY created_at DESC LIMIT 500",
       [role || null],
@@ -285,11 +286,11 @@ app.get("/api/users", requireDatabase, authenticate, allowRoles("admin"), async 
 app.post("/api/users", requireDatabase, authenticate, allowRoles("admin"), async (req, res, next) => {
   try {
     const { name, email, role, department, year, employeeId, password } = req.body || {};
-    if (typeof name !== "string" || name.trim().length < 2 || typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !["student", "faculty"].includes(role) || typeof password !== "string" || password.length < 8 || password.length > 128 || (role === "faculty" && (typeof employeeId !== "string" || !/^FAC[A-Z0-9]{3,12}$/i.test(employeeId)))) return res.status(400).json({ message: "Provide a valid name, email, role, and initial password of at least 8 characters. Faculty records also need a faculty ID." });
+    if (typeof name !== "string" || name.trim().length < 2 || name.length > 160 || typeof email !== "string" || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !["student", "faculty", "staff"].includes(role) || typeof password !== "string" || password.length < 8 || password.length > 128 || (role === "faculty" && (typeof employeeId !== "string" || !/^FAC[A-Z0-9]{3,12}$/i.test(employeeId))) || (role === "staff" && (typeof department !== "string" || department.trim().length < 2 || department.length > 120))) return res.status(400).json({ message: "Provide a valid name, email, role, department where required, and initial password of at least 8 characters. Faculty records also need a faculty ID." });
     const passwordHash = await bcrypt.hash(password, 12);
     const result = await pool.query(
       "INSERT INTO users (name, email, role, department, year, employee_id, password_hash) VALUES ($1, lower($2), $3, $4, $5, $6, $7) RETURNING id, name, email, role, department, year, student_id, employee_id, status",
-      [name.trim(), email.trim(), role, department || null, year || null, role === "faculty" ? employeeId.toUpperCase() : null, passwordHash],
+      [name.trim(), email.trim(), role, department?.trim() || null, year || null, role === "faculty" ? employeeId.toUpperCase() : null, passwordHash],
     );
     const user = result.rows[0];
     if (role === "student") {
@@ -313,7 +314,7 @@ app.patch("/api/users/:id", requireDatabase, authenticate, allowRoles("admin"), 
        WHERE id = $5 AND role <> 'admin' RETURNING id, name, email, role, student_id, department, year`,
       [name?.trim() || null, department || null, year || null, status || null, req.params.id],
     );
-    if (!result.rowCount) return res.status(404).json({ message: "The requested student or faculty record was not found." });
+    if (!result.rowCount) return res.status(404).json({ message: "The requested user record was not found." });
     res.json(publicUser(result.rows[0]));
   } catch (error) { next(error); }
 });
@@ -321,12 +322,13 @@ app.patch("/api/users/:id", requireDatabase, authenticate, allowRoles("admin"), 
 app.delete("/api/users/:id", requireDatabase, authenticate, allowRoles("admin"), async (req, res, next) => {
   try {
     const result = await pool.query("DELETE FROM users WHERE id = $1 AND role <> 'admin'", [req.params.id]);
-    if (!result.rowCount) return res.status(404).json({ message: "The requested student or faculty record was not found." });
+    if (!result.rowCount) return res.status(404).json({ message: "The requested user record was not found." });
     res.status(204).end();
   } catch (error) { next(error); }
 });
 
 registerManagementRoutes(app, { pool, requireDatabase, authenticate, allowRoles });
+registerComplaintRoutes(app, { pool, requireDatabase, authenticate, allowRoles });
 
 app.use((error, _req, res, _next) => {
   console.error("API request failed:", error.message);
